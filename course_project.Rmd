@@ -1,0 +1,231 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Christoph Liedtke"
+date: "6/22/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This is my course project work for the _Practical Machine Learning_ course. The idea is to try and predict whether test subjects/athletes were doing exercises correctly or not using data from a variety of activity monotoring divices. The data was kindly made available by the [Groupeware](http://groupware.les.inf.puc-rio.br/har).
+
+
+#### get datasets and libraries
+```{r warning=F, message=F}
+# data
+building<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", row.names = 1, na.strings = c("","NA",NA,"#DIV/0!"))
+pml.testing<-read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", row.names = 1, na.strings = c("","NA",NA,"#DIV/0!"))
+
+# libraries
+library(caret)
+library(corrplot)
+library(rattle)
+
+```
+
+#### slice building dataset into training and testing
+```{r}
+inTrain<-createDataPartition(y=building$classe,
+                             p=0.75,
+                             list=F)
+training<-building[inTrain,]
+testing<-building[-inTrain,]
+
+```
+
+## Explore features/variables
+
+The explanation of the dataset already provides us with some general information:
+* Number of paricipants: 6  
+* Number of repetitions per exercise: 10  
+* Manner in which exercise was done:  
+  * Class A: correctly
+  * Class B: throwing the elbows to the front  
+  * Class C: lifting the dumbbell only halfway  
+  * Class D: lowering the dumbbell only halfway  
+  * Class E: throwing the hips to the front  
+* Sensor positions:  
+  * belt  
+  * arm  
+  * forearm  
+  * dumbell  
+* Each sensor has three axes of movement:  
+  1 pitch  
+  2 yaw  
+  3 roll  
+* Each sensor records multiple measurements about the movement along each of these axes such as the amplitude of the roll, or the min/max yaw etc.
+
+#### Cleaning data
+
+An important first step is to clean the data matrix to remove any 'metadata' that might not be relevant/informative for the analyses and to deal with variables that have missing data. Although there are ways to interpolate missing data, here we will remove any rows with missing data 
+
+
+```{r}
+# The first 6 variables contain things like log information from the recording devices and can be removed
+training.meta<-training[,1:6]
+training<-training[,-c(1:6)]
+
+# any rows that have missing data can also be removed:
+training<-training[,!sapply(training, function(x) any(is.na(x)))]
+```
+
+
+
+#### Plotting Data
+
+It is also a good idea to plot the data to get an idea of intercorrelation of variables and also to see if there are any immediate patterns. 
+
+```{r corplot}
+# correlation of variables
+corrplot(cor(training[,-ncol(training)]),
+         type = "upper",
+         order = "hclust", 
+         tl.col = "black",
+         tl.srt = 45,
+         tl.cex=0.5)
+```
+
+The correlation plot shows that there are some intercorrelated variables and depending on the downstream analysis performed, this is something that should be kept in mind (less of a problem for Random Forest for example). Performing a ridgit rotation such a PCR is a good way of visualizing high-dimensional data (and also a way of removing/reducing intercorrelation).
+
+
+```{r pca}
+# Pca for all variables but "classe"
+pca<-prcomp(training[,-ncol(training)], scale. = T, center = T)
+
+# Plot first two principal components and color-code by 'classe'
+par(mfrow=c(1,2))
+plot(pca$x[,1:2], col=as.numeric(training$classe))
+legend("bottomright", pch=16, col=as.numeric(unique(training$classe)), legend = unique(training$classe), cex=0.5)
+
+### there is some separation by class, but this is not the main factor driving clustering, we can plot the same axes but looking at another classification of the data such as the users
+
+plot(pca$x[,1:2], col=as.numeric(training.meta$user_name))
+
+legend("bottomright", pch=16, col=unique(as.numeric(training.meta$user_name)), legend = unique(training.meta$user_name), cex=0.5)
+
+### the different users are what is causing the clustering observed in the PCA biplot. This is a good example of where plotting data can greatly help to understand patterns.
+```
+
+## Model Fitting
+
+The next step is to fit models to see how accurately we can predict the 'classe' variable with the remaining variables.
+
+#### Linear Discriminant Analysis
+```{r lda, eval=F}
+modLDA <- train(data = training,
+                classe ~ .,
+                method = "lda")
+
+```
+
+```{r echo=F}
+#saveRDS(modLDA, "modLDA.rds")
+modLDA<-readRDS("~/Documents/coursera/JHU_datascience/practical_machinelearning/course_project/models/modLDA.rds")
+```
+
+```{r}
+predLDA <- predict(modLDA, newdata = testing)
+confusionMatrix(testing$classe, predLDA)
+```
+
+
+#### Classification Tree
+```{r CT, eval=F}
+modCT<-train(data = training,
+             classe ~ .,
+             method = "rpart")
+```
+
+```{r echo=F}
+#saveRDS(modCT, "~/Documents/coursera/JHU_datascience/practical_machinelearning/course_project/models/modCT.rds")
+modCT<-readRDS("~/Documents/coursera/JHU_datascience/practical_machinelearning/course_project/models/modCT.rds")
+```
+
+```{r}
+modCT$finalModel
+fancyRpartPlot(modCT$finalModel)
+
+predCT<-predict(modCT, newdata = testing)
+confusionMatrix(predCT, testing$classe)
+```
+
+
+#### Boosting
+```{r BOOST, eval=F}
+modBOOST<-train(data = training,
+                classe ~ .,
+                method = "gbm",
+                verbose=F)
+```
+
+```{r echo=F}
+#saveRDS(modBOOST, "modBOOST.rds")
+modBOOST<-readRDS("~/Documents/coursera/JHU_datascience/practical_machinelearning/course_project/models/modBOOST.rds")
+```
+
+```{r}
+print(modBOOST)
+
+predBOOST<-predict(modBOOST, newdata = testing)
+confusionMatrix(predBOOST, testing$classe)
+```
+
+#### Random Forest
+```{r RF, eval=F}
+modRF<-train(data=training,
+              classe~.,
+              method="rf",
+              prox=T)
+
+```
+
+```{r echo=F}
+#saveRDS(modRF, "modRF.rds")
+modRF<-readRDS("~/Documents/coursera/JHU_datascience/practical_machinelearning/course_project/models/modRF.rds")
+```
+
+```{r }
+predRF<-predict(modRF, newdata = testing)
+confusionMatrix(predRF, testing$classe)
+```
+#### Compare model accuracies
+
+Based on the model accuracies, we can choose which model performed best
+
+```{r}
+
+lda.acc<-confusionMatrix(predLDA, testing$classe)$overall["Accuracy"]
+CT.acc<-confusionMatrix(predCT, testing$classe)$overall["Accuracy"]
+boost.acc<-confusionMatrix(predBOOST, testing$classe)$overall["Accuracy"]
+RF.acc<-confusionMatrix(predRF, testing$classe)$overall["Accuracy"]
+
+barplot(c(lda.acc, CT.acc, boost.acc, RF.acc),
+        col="deepskyblue3",
+        names.arg = c("LDA","Class. Tree","Boosting","Rand. Forest"),
+        ylim=c(0,1),
+        ylab="Accuracy", las=1)
+```
+
+Random Forest is the best model, slightly outperforming boosting. One could combine predictors to impove the model, but as the accuracy is pretty good it is probably not necessary here.
+
+## Applying the final model
+
+Having determined which model to use, we can now apply this model to the real data (the testing data provided by the website) to predict whether each user was performing the exercise correctly or not. 
+
+```{r}
+predPML.testing<-predict(modRF, newdata=pml.testing)
+print(data.frame(user_name=pml.testing$user_name, problem_id=pml.testing$problem_id, predicted_class=(predPML.testing)))
+```
+
+
+#### Reproducibility
+
+The following R and package versions were used for this script
+
+```{r}
+print(sessionInfo())
+```
